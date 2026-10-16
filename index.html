@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>J.A.R.V.I.S.</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#03080f">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#03080f; --panel:rgba(0,40,60,.35); --line:rgba(0,220,255,.35);
+  --cyan:#29e3ff; --cyan-dim:#0b8fb0; --gold:#ffb43a; --red:#ff4d5e;
+  --text:#c9f6ff; --muted:#6fa9b8;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#03080f}}
+:root[data-theme="dark"]{--bg:#03080f}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:Rajdhani,system-ui,sans-serif;font-size:17px;overflow-x:hidden;
+  background-image:radial-gradient(circle at 50% 30%,rgba(0,140,200,.18),transparent 60%),
+  linear-gradient(rgba(0,200,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,200,255,.04) 1px,transparent 1px);
+  background-size:auto,32px 32px,32px 32px}
+.wrap{max-width:900px;margin:0 auto;padding:16px;display:flex;flex-direction:column;min-height:100%;gap:14px}
+header{display:flex;justify-content:space-between;align-items:center;font-family:Orbitron,sans-serif;letter-spacing:.2em;font-size:12px;color:var(--muted)}
+header b{color:var(--cyan);font-size:15px}
+.gear{background:none;border:1px solid var(--line);color:var(--cyan);font-family:inherit;font-size:11px;letter-spacing:.15em;padding:6px 10px;border-radius:4px;cursor:pointer}
+/* reactor */
+.core{position:relative;width:min(300px,70vw);aspect-ratio:1;margin:6px auto 0}
+.ring{position:absolute;inset:0;border-radius:50%;border:2px solid var(--line)}
+.r1{border-color:transparent;border-top-color:var(--cyan);border-bottom-color:var(--cyan);animation:spin 6s linear infinite}
+.r2{inset:12%;border-style:dashed;border-color:var(--cyan-dim);animation:spin 14s linear infinite reverse}
+.r3{inset:24%;border-color:transparent;border-left-color:var(--gold);border-right-color:var(--gold);animation:spin 4s linear infinite}
+.r4{inset:34%;background:radial-gradient(circle,#e8fdff 0,var(--cyan) 25%,rgba(0,150,200,.25) 60%,transparent 70%);border:none;
+  box-shadow:0 0 40px var(--cyan),0 0 90px rgba(41,227,255,.4);animation:pulse 3s ease-in-out infinite}
+.core svg{position:absolute;inset:0;width:100%;height:100%;animation:spin 30s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{50%{transform:scale(.92);opacity:.85}}
+body.listening .r4{animation:pulse .6s ease-in-out infinite;box-shadow:0 0 50px var(--gold),0 0 110px rgba(255,180,58,.5)}
+body.thinking .r1{animation-duration:1s}
+body.speaking .r4{animation:pulse .35s ease-in-out infinite}
+.state{text-align:center;font-family:Orbitron,sans-serif;font-size:12px;letter-spacing:.3em;color:var(--cyan)}
+/* log */
+.log{flex:1;min-height:180px;max-height:42vh;overflow-y:auto;border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:12px;display:flex;flex-direction:column;gap:10px;
+  clip-path:polygon(0 12px,12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%)}
+.msg{line-height:1.4;white-space:pre-wrap;word-wrap:break-word}
+.msg .who{font-family:Orbitron,sans-serif;font-size:10px;letter-spacing:.2em;display:block;margin-bottom:2px}
+.msg.user .who{color:var(--gold)} .msg.jarvis .who{color:var(--cyan)}
+.msg.sys{color:var(--muted);font-size:14px;font-style:italic}
+form{display:flex;gap:8px}
+input[type=text],input[type=password]{flex:1;min-width:0;background:rgba(0,30,45,.7);border:1px solid var(--line);color:var(--text);padding:12px;border-radius:4px;font:inherit}
+input:focus{outline:1px solid var(--cyan)}
+.btn{background:rgba(41,227,255,.12);border:1px solid var(--cyan);color:var(--cyan);font-family:Orbitron,sans-serif;font-size:11px;letter-spacing:.15em;padding:0 14px;border-radius:4px;cursor:pointer;min-height:44px}
+.btn:hover{background:rgba(41,227,255,.25)}
+.mic{width:56px;font-size:20px;padding:0}
+body.listening .mic{border-color:var(--gold);color:var(--gold);background:rgba(255,180,58,.15)}
+.settings{display:none;border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:12px;gap:10px;flex-direction:column;font-size:15px}
+.settings.open{display:flex}
+.settings label{display:flex;flex-direction:column;gap:4px;color:var(--muted)}
+.settings .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+select{background:rgba(0,30,45,.7);border:1px solid var(--line);color:var(--text);padding:8px;border-radius:4px;font:inherit}
+small{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><span><b>J.A.R.V.I.S.</b> &nbsp;MK-I</span><span id="clock">--:--</span><button class="gear" id="gearBtn">CONFIG</button></header>
+
+  <div class="settings" id="settings">
+    <div class="row"><span>Cérebro:</span><span id="brainInfo">verificando…</span></div>
+    <label>Chave da API Anthropic (só necessária fora do claude.ai; fica salva apenas neste navegador)
+      <input type="password" id="apiKey" placeholder="sk-ant-...">
+    </label>
+    <div class="row">
+      <label style="flex:1">Voz
+        <select id="voiceSel"></select>
+      </label>
+      <label><span>Falar respostas</span><input type="checkbox" id="speakOn" checked></label>
+      <label><span>Sempre ouvindo ("Jarvis")</span><input type="checkbox" id="wakeOn"></label>
+      <button type="button" class="btn" id="installBtn" style="display:none">INSTALAR APP</button>
+    </div>
+    <small>Toque no microfone para falar. Com "Sempre ouvindo" ligado, basta dizer "Jarvis" (ex: "Jarvis, que horas são?") enquanto o app estiver aberto.</small>
+  </div>
+
+  <div class="core" aria-hidden="true">
+    <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div><div class="ring r4"></div>
+    <svg viewBox="0 0 100 100"><g fill="none" stroke="#29e3ff" stroke-opacity=".5" stroke-width=".4">
+      <circle cx="50" cy="50" r="48" stroke-dasharray="1 3"/></g>
+      <g fill="#29e3ff" fill-opacity=".7" font-size="2.6" font-family="Orbitron">
+      <text x="50" y="5" text-anchor="middle">SYS ONLINE</text><text x="50" y="97" text-anchor="middle">STARK INDUSTRIES</text></g></svg>
+  </div>
+  <div class="state" id="state">EM ESPERA</div>
+
+  <div class="log" id="log" aria-live="polite"></div>
+
+  <form id="form">
+    <button type="button" class="btn mic" id="micBtn" title="Falar">🎙</button>
+    <input type="text" id="text" placeholder="Fale ou digite um comando, senhor…" autocomplete="off">
+    <button class="btn" type="submit">ENVIAR</button>
+  </form>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = $('log'), stateEl = $('state');
+const store = { get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}} };
+
+const SYSTEM = `Você é J.A.R.V.I.S., a inteligência artificial pessoal criada por Tony Stark, agora servindo ao usuário.
+Personalidade: educado, britânico no estilo, levemente irônico e espirituoso, sempre leal e eficiente. Chame o usuário de "senhor".
+Responda em português do Brasil, de forma curta e falada (1 a 3 frases), porque sua resposta será lida em voz alta. Sem markdown, sem listas, sem emojis.
+Use as ferramentas quando ajudarem (hora, abrir sites, timers, notas). Data/hora local atual: `;
+
+// ---------- tools (page functions Claude can call) ----------
+const notes = JSON.parse(store.get('jarvis_notes') || '[]');
+const TOOLS = [
+  { name:'hora_atual', description:'Retorna data e hora locais do usuário.', inputSchema:{type:'object',properties:{}},
+    execute:()=>({agora:new Date().toLocaleString('pt-BR',{dateStyle:'full',timeStyle:'short'})}) },
+  { name:'abrir_site', description:'Abre uma URL em nova aba (ex: YouTube, Google, uma busca).', inputSchema:{type:'object',properties:{url:{type:'string'}},required:['url']},
+    execute:({url})=>{ if(!/^https?:\/\//.test(url)) url='https://'+url; const w=window.open(url,'_blank','noopener'); return {aberto:!!w||'pode ter sido bloqueado pelo navegador', url}; } },
+  { name:'criar_timer', description:'Cria um timer; quando terminar, o Jarvis avisa em voz alta.', inputSchema:{type:'object',properties:{segundos:{type:'number'},rotulo:{type:'string'}},required:['segundos']},
+    execute:({segundos,rotulo})=>{ setTimeout(()=>{ const t=`Senhor, o timer${rotulo?' "'+rotulo+'"':''} terminou.`; add('jarvis',t); speak(t); }, segundos*1000); return {ok:true,segundos}; } },
+  { name:'salvar_nota', description:'Salva uma nota/lembrete do usuário neste navegador.', inputSchema:{type:'object',properties:{texto:{type:'string'}},required:['texto']},
+    execute:({texto})=>{ notes.push({texto,em:new Date().toISOString()}); store.set('jarvis_notes',JSON.stringify(notes)); return {ok:true,total:notes.length}; } },
+  { name:'listar_notas', description:'Lista as notas salvas.', inputSchema:{type:'object',properties:{}}, execute:()=>({notas:notes}) },
+];
+
+// ---------- UI ----------
+function add(who, text){
+  const d=document.createElement('div'); d.className='msg '+who;
+  if(who==='sys'){ d.textContent=text; }
+  else { const w=document.createElement('span'); w.className='who'; w.textContent= who==='user'?'VOCÊ':'JARVIS'; const b=document.createElement('span'); b.textContent=text; d.append(w,b); }
+  log.append(d); log.scrollTop=log.scrollHeight; return d;
+}
+function setState(s){ document.body.className=s; stateEl.textContent={'':'EM ESPERA',listening:'OUVINDO…',thinking:'PROCESSANDO…',speaking:'RESPONDENDO…'}[s]; }
+setInterval(()=>$('clock').textContent=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}),1000);
+$('gearBtn').onclick=()=>$('settings').classList.toggle('open');
+$('apiKey').value=store.get('jarvis_key')||''; $('apiKey').onchange=e=>{store.set('jarvis_key',e.target.value.trim()); refreshBrain();};
+$('speakOn').checked=store.get('jarvis_speak')!=='0'; $('speakOn').onchange=e=>store.set('jarvis_speak',e.target.checked?'1':'0');
+
+// ---------- voice out ----------
+let voices=[];
+function loadVoices(){
+  voices=speechSynthesis.getVoices().filter(v=>/^pt/i.test(v.lang)); if(!voices.length) voices=speechSynthesis.getVoices();
+  const sel=$('voiceSel'), saved=store.get('jarvis_voice'); sel.innerHTML='';
+  voices.forEach((v,i)=>{const o=document.createElement('option');o.value=v.name;o.textContent=`${v.name} (${v.lang})`;sel.append(o);});
+  const male=voices.find(v=>/daniel|ricardo|antonio|male|masculin/i.test(v.name));
+  sel.value = saved && voices.some(v=>v.name===saved) ? saved : (male||voices[0]||{}).name||'';
+}
+if('speechSynthesis' in window){ loadVoices(); speechSynthesis.onvoiceschanged=loadVoices; }
+$('voiceSel').onchange=e=>store.set('jarvis_voice',e.target.value);
+function speak(text){
+  return new Promise(res=>{
+    if(!$('speakOn').checked || !('speechSynthesis' in window)) return res();
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text); u.lang='pt-BR'; u.rate=1.02; u.pitch=.85;
+    const v=voices.find(v=>v.name===$('voiceSel').value); if(v) u.voice=v;
+    u.onstart=()=>setState('speaking'); u.onend=u.onerror=()=>{setState('');res();};
+    speechSynthesis.speak(u);
+  });
+}
+
+// ---------- voice in ----------
+// Dois modos: toque no microfone (um comando) ou "sempre ouvindo", que espera a palavra "Jarvis".
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const WAKE=/\b(jarvis|jarbas|djarvis|jervis)\b[,.!]?\s*/i;
+let rec=null, listening=false, mode='idle', armed=false, armTimer=null; // mode: idle | ptt | wake
+const wakeOn=()=>$('wakeOn').checked;
+$('wakeOn').checked=store.get('jarvis_wake')==='1';
+function startRec(m){ if(!rec||listening||busy||document.body.className==='speaking') return; mode=m; rec.continuous=(m==='wake'); try{rec.start();}catch(e){} }
+function stopRec(){ if(rec&&listening) try{rec.stop();}catch(e){} }
+function resumeWake(){ if(wakeOn()) setTimeout(()=>startRec('wake'),300); }
+function arm(){ armed=true; clearTimeout(armTimer); armTimer=setTimeout(()=>{armed=false;},8000); }
+if(SR){
+  rec=new SR(); rec.lang='pt-BR'; rec.interimResults=true;
+  rec.onstart=()=>{listening=true; setState(mode==='wake'&&!armed?'':'listening'); if(mode==='wake') stateEl.textContent=armed?'OUVINDO…':'AGUARDANDO "JARVIS"';};
+  rec.onresult=e=>{
+    const r=e.results[e.results.length-1], said=r[0].transcript.trim();
+    if(mode==='ptt'){ $('text').value=said; if(r.isFinal){ stopRec(); submit(); } return; }
+    // modo sempre ouvindo
+    const m=said.match(WAKE);
+    if(!r.isFinal){ if(m||armed){ setState('listening'); $('text').value=m?said.slice(m.index+m[0].length):said; } return; }
+    let cmd=null;
+    if(m) cmd=said.slice(m.index+m[0].length).trim(); else if(armed) cmd=said;
+    if(cmd===null) return;
+    if(!cmd){ arm(); stopRec(); $('text').value=''; speak('Pois não, senhor?').then(()=>startRec('wake')); return; }
+    armed=false; $('text').value=cmd; stopRec(); submit();
+  };
+  rec.onerror=e=>{ if(e.error==='not-allowed'||e.error==='service-not-allowed'){ $('wakeOn').checked=false; add('sys','Microfone bloqueado aqui. Digite o comando, ou abra o Jarvis instalado no Chrome/Edge para usar a voz.'); } };
+  rec.onend=()=>{ listening=false; if(document.body.className==='listening') setState(''); if(mode==='wake'&&!busy&&document.body.className!=='speaking') resumeWake(); };
+} else { $('micBtn').title='Reconhecimento de voz indisponível neste navegador (use Chrome ou Edge)'; $('micBtn').style.opacity=.4; }
+$('wakeOn').onchange=e=>{ store.set('jarvis_wake',e.target.checked?'1':'0'); if(!rec){ e.target.checked=false; return add('sys','Este navegador não reconhece voz. Use Chrome ou Edge.'); } if(e.target.checked) startRec('wake'); else { mode='idle'; stopRec(); setState(''); } };
+$('micBtn').onclick=()=>{
+  if(!rec) return add('sys','Este navegador não reconhece voz. Use Chrome ou Edge, ou digite.');
+  speechSynthesis.cancel();
+  if(listening && mode==='ptt') return stopRec();
+  if(listening) { stopRec(); setTimeout(()=>startRec('ptt'),250); } else startRec('ptt');
+};
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) resumeWake(); });
+
+// ---------- install (PWA) ----------
+let installEvt=null;
+window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); installEvt=e; $('installBtn').style.display=''; });
+$('installBtn').onclick=async()=>{ if(!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt=null; $('installBtn').style.display='none'; };
+if('serviceWorker' in navigator && location.protocol==='https:' && !window.claude) navigator.serviceWorker.register('sw.js').catch(()=>{});
+
+// ---------- brain ----------
+let sample=null; const history=[];
+async function initBrain(){ try{ if(window.claude?.use) sample=await window.claude.use('sample'); }catch(e){} refreshBrain(); }
+function refreshBrain(){
+  $('brainInfo').textContent = sample ? 'Claude via sua conta claude.ai (nenhuma chave necessária)'
+    : (store.get('jarvis_key') ? 'Claude via chave de API' : 'sem conexão: informe uma chave de API');
+}
+async function askViaSample(msgs, onText){
+  const turns = msgs.map((m,i)=> i===0 && m.role==='user' ? {...m, content: SYSTEM+new Date().toLocaleString('pt-BR')+'\n\nUsuário: '+m.content} : m);
+  const {text}=await sample(turns,{tools:TOOLS, modelTier:'quick', cache:false, onText:({text})=>onText(text)});
+  return text;
+}
+async function askViaApi(msgs, onText){
+  const key=store.get('jarvis_key'); if(!key) throw {code:'no_key'};
+  const tools=TOOLS.map(t=>({name:t.name,description:t.description,input_schema:t.inputSchema}));
+  let convo=msgs.map(m=>({role:m.role,content:m.content}));
+  for(let round=0;round<5;round++){
+    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:600,system:SYSTEM+new Date().toLocaleString('pt-BR'),tools,messages:convo})});
+    const j=await r.json(); if(!r.ok) throw {code:'api',message:j.error?.message||r.status};
+    const uses=j.content.filter(c=>c.type==='tool_use');
+    const txt=j.content.filter(c=>c.type==='text').map(c=>c.text).join(' ').trim();
+    if(!uses.length){ onText(txt); return txt; }
+    convo.push({role:'assistant',content:j.content});
+    convo.push({role:'user',content:await Promise.all(uses.map(async u=>{
+      const t=TOOLS.find(t=>t.name===u.name); let out; try{out=await t.execute(u.input||{});}catch(e){out={erro:String(e)};}
+      return {type:'tool_result',tool_use_id:u.id,content:JSON.stringify(out)};
+    }))});
+  }
+  return 'Desculpe, senhor, me perdi nos cálculos.';
+}
+const ERR={not_granted:'Preciso da sua permissão para usar o Claude, senhor. Recarregue e permita.',rate_limited:'Muitos pedidos seguidos, senhor. Um momento.',
+  no_key:'Estou sem cérebro conectado, senhor. Abra CONFIG e informe uma chave de API.'};
+let busy=false;
+async function submit(){
+  let q=$('text').value.trim(); if(!q||busy) return;
+  q=q.replace(/^(ok |ei |hey )?jarvis[,!]?\s*/i,'')||q; $('text').value='';
+  add('user',q); history.push({role:'user',content:q}); while(history.length>16 || (history.length && history[0].role!=="user")) history.shift();
+  busy=true; setState('thinking'); const el=add('jarvis','…'); const body=el.lastChild;
+  try{
+    const ans = sample ? await askViaSample(history, t=>body.textContent=t) : await askViaApi(history, t=>body.textContent=t);
+    body.textContent=ans; history.push({role:'assistant',content:ans});
+    busy=false; await speak(ans);
+    resumeWake();
+  }catch(e){
+    history.pop(); const m=ERR[e.code]||('Falha nos sistemas, senhor: '+(e.message||e.code||e)); body.textContent=m; busy=false; speak(m).then(resumeWake);
+  }finally{ busy=false; if(document.body.className==='thinking') setState(''); }
+}
+$('form').onsubmit=e=>{e.preventDefault();submit();};
+
+add('sys','Sistemas online. Toque no microfone, digite, ou ligue "Sempre ouvindo" em CONFIG e diga "Jarvis". Tente: "Que horas são?", "Abra o YouTube", "Me lembre em 1 minuto de beber água".');
+initBrain();
+if(wakeOn()) setTimeout(()=>startRec('wake'),800);
+</script>
+</body>
+</html>
