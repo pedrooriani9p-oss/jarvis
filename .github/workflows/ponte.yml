@@ -1,0 +1,28 @@
+name: Gerar Jarvis Ponte (.exe)
+
+on:
+  push:
+    branches: [main]
+    paths: ["ponte/**", ".github/workflows/ponte.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller==6.11.1
+      - run: pyinstaller --onefile --noconsole --name JarvisPonte ponte/jarvis_ponte.py
+      - name: Publicar na release "ponte"
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view ponte >/dev/null 2>&1 || gh release create ponte --title "Jarvis Ponte" --notes "Programa que deixa o Jarvis controlar seu PC com Windows. Baixe o JarvisPonte.exe e abra."
+          gh release upload ponte dist/JarvisPonte.exe --clobber

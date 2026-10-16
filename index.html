@@ -67,13 +67,17 @@ small{color:var(--muted)}
 </head>
 <body>
 <div class="wrap">
-  <header><span><b>J.A.R.V.I.S.</b> &nbsp;MK-I</span><span id="clock">--:--</span><button class="gear" id="gearBtn">CONFIG</button></header>
+  <header><span><b>J.A.R.V.I.S.</b> &nbsp;MK-I</span><span><span id="pcBadge" title="Jarvis Ponte">PC ○</span> &nbsp;<span id="clock">--:--</span></span><button class="gear" id="gearBtn">CONFIG</button></header>
 
   <div class="settings" id="settings">
     <div class="row"><span>Cérebro:</span><span id="brainInfo">verificando…</span></div>
     <label>Chave da API Anthropic (só necessária fora do claude.ai; fica salva apenas neste navegador)
       <input type="password" id="apiKey" placeholder="sk-ant-...">
     </label>
+    <label>Código do PC (do programa Jarvis Ponte, para controlar o computador) <span id="pcInfo"></span>
+      <input type="password" id="pcCode" placeholder="cole aqui o código que a ponte copiou">
+    </label>
+    <small><a id="ponteLink" style="color:var(--cyan)" href="https://github.com/pedrooriani9p-oss/jarvis/releases/download/ponte/JarvisPonte.exe">Baixar o Jarvis Ponte para Windows</a></small>
     <label>Chave da ElevenLabs (opcional, para vozes premium realistas; grátis em elevenlabs.io)
       <input type="password" id="elKey" placeholder="sk_...">
     </label>
@@ -118,7 +122,7 @@ const store = { get(k){try{return localStorage.getItem(k)}catch(e){return null}}
 const SYSTEM = `Você é J.A.R.V.I.S., a inteligência artificial pessoal criada por Tony Stark, agora servindo ao usuário.
 Personalidade: educado, britânico no estilo, levemente irônico e espirituoso, sempre leal e eficiente. Chame o usuário de "senhor".
 Responda em português do Brasil, de forma curta e falada (1 a 3 frases), porque sua resposta será lida em voz alta. Sem markdown, sem listas, sem emojis.
-Use as ferramentas quando ajudarem (hora, abrir sites, timers, notas). Data/hora local atual: `;
+Use as ferramentas quando ajudarem (hora, abrir sites, timers, notas e, se disponíveis, controle do PC). Antes de desligar, reiniciar ou fechar programas, confirme com o usuário. Data/hora local atual: `;
 
 // ---------- tools (page functions Claude can call) ----------
 const notes = JSON.parse(store.get('jarvis_notes') || '[]');
@@ -133,6 +137,40 @@ const TOOLS = [
     execute:({texto})=>{ notes.push({texto,em:new Date().toISOString()}); store.set('jarvis_notes',JSON.stringify(notes)); return {ok:true,total:notes.length}; } },
   { name:'listar_notas', description:'Lista as notas salvas.', inputSchema:{type:'object',properties:{}}, execute:()=>({notas:notes}) },
 ];
+
+// ---------- controle do PC (via programa Jarvis Ponte, rodando no próprio computador) ----------
+const PONTE='http://127.0.0.1:47800';
+let pcOnline=false;
+async function ponte(acao,args){
+  const r=await fetch(`${PONTE}/acao/${acao}`,{method:'POST',headers:{'content-type':'application/json','x-jarvis-codigo':store.get('jarvis_pc')||''},body:JSON.stringify(args||{})});
+  return r.json();
+}
+const S=(props,req)=>({type:'object',properties:props,required:req||[]});
+const PC_TOOLS=[
+  {name:'pc_abrir_programa',description:'Abre um programa ou jogo instalado no PC pelo nome (ex: calculadora, spotify, chrome, word, nome de um jogo).',inputSchema:S({nome:{type:'string'}},['nome']),execute:a=>ponte('abrir_programa',a)},
+  {name:'pc_fechar_programa',description:'Fecha um programa aberto pelo nome do processo (ex: chrome, notepad, spotify). Confirme com o usuário antes.',inputSchema:S({nome:{type:'string'}},['nome']),execute:a=>ponte('fechar_programa',a)},
+  {name:'pc_volume',description:'Sobe, desce ou silencia o volume do PC. passos: 1 a 50 (cada passo ~2%).',inputSchema:S({acao:{type:'string',enum:['subir','descer','mudo']},passos:{type:'number'}},['acao']),execute:a=>ponte('volume',a)},
+  {name:'pc_midia',description:'Controla a música/vídeo tocando no PC.',inputSchema:S({acao:{type:'string',enum:['tocar_pausar','proxima','anterior','parar']}},['acao']),execute:a=>ponte('midia',a)},
+  {name:'pc_energia',description:'Desliga, reinicia (ambos em 60s), cancela desligamento ou bloqueia a tela. Confirme antes de desligar ou reiniciar.',inputSchema:S({acao:{type:'string',enum:['desligar','reiniciar','cancelar','bloquear']}},['acao']),execute:a=>ponte('energia',a)},
+  {name:'pc_print_tela',description:'Tira um print da tela e salva em Imagens\\Jarvis.',inputSchema:S({}),execute:()=>ponte('print_tela',{})},
+  {name:'pc_abrir_pasta',description:'Abre uma pasta: documentos, downloads, área de trabalho, imagens, músicas, vídeos.',inputSchema:S({nome:{type:'string'}},['nome']),execute:a=>ponte('abrir_pasta',a)},
+  {name:'pc_procurar_arquivos',description:'Procura arquivos pelo nome na pasta do usuário. Retorna até 15 com caminho.',inputSchema:S({termo:{type:'string'}},['termo']),execute:a=>ponte('procurar_arquivos',a)},
+  {name:'pc_abrir_arquivo',description:'Abre um arquivo (documento, foto, vídeo) pelo caminho completo, geralmente vindo de pc_procurar_arquivos.',inputSchema:S({caminho:{type:'string'}},['caminho']),execute:a=>ponte('abrir_arquivo',a)},
+  {name:'pc_info_sistema',description:'Informa bateria, espaço em disco e nome do PC.',inputSchema:S({}),execute:()=>ponte('info_sistema',{})},
+  {name:'pc_digitar',description:'Digita/cola um texto onde o cursor estiver no PC (ex: ditar um texto num documento).',inputSchema:S({texto:{type:'string'}},['texto']),execute:a=>ponte('digitar',a)},
+];
+const activeTools=()=>pcOnline?TOOLS.concat(PC_TOOLS):TOOLS;
+async function checkPonte(){
+  let st=null;
+  try{ const r=await fetch(PONTE+'/status',{headers:{'x-jarvis-codigo':store.get('jarvis_pc')||''}}); st=await r.json(); }catch(e){}
+  const was=pcOnline; pcOnline=!!(st&&st.pareado);
+  $('pcBadge').textContent=pcOnline?'PC ●':'PC ○'; $('pcBadge').style.color=pcOnline?'var(--cyan)':'';
+  $('pcInfo').textContent=pcOnline?'· conectado ✓':(st?'· ponte encontrada, código errado':'· ponte não encontrada');
+  if(pcOnline&&!was) add('sys','Controle do PC conectado. Tente: "Jarvis, abre a calculadora".');
+}
+$('pcCode').value=store.get('jarvis_pc')||'';
+$('pcCode').onchange=e=>{ store.set('jarvis_pc',e.target.value.trim()); checkPonte(); };
+if(!window.claude){ checkPonte(); setInterval(checkPonte,20000); }
 
 // ---------- UI ----------
 function add(who, text){
@@ -339,12 +377,12 @@ function refreshBrain(){
 }
 async function askViaSample(msgs, onText){
   const turns = msgs.map((m,i)=> i===0 && m.role==='user' ? {...m, content: SYSTEM+new Date().toLocaleString('pt-BR')+'\n\nUsuário: '+m.content} : m);
-  const {text}=await sample(turns,{tools:TOOLS, modelTier:'quick', cache:false, onText:({text})=>onText(text)});
+  const {text}=await sample(turns,{tools:activeTools(), modelTier:'quick', cache:false, onText:({text})=>onText(text)});
   return text;
 }
 async function askViaApi(msgs, onText){
   const key=store.get('jarvis_key'); if(!key) throw {code:'no_key'};
-  const tools=TOOLS.map(t=>({name:t.name,description:t.description,input_schema:t.inputSchema}));
+  const tools=activeTools().map(t=>({name:t.name,description:t.description,input_schema:t.inputSchema}));
   let convo=msgs.map(m=>({role:m.role,content:m.content}));
   for(let round=0;round<5;round++){
     const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
@@ -355,7 +393,7 @@ async function askViaApi(msgs, onText){
     if(!uses.length){ onText(txt); return txt; }
     convo.push({role:'assistant',content:j.content});
     convo.push({role:'user',content:await Promise.all(uses.map(async u=>{
-      const t=TOOLS.find(t=>t.name===u.name); let out; try{out=await t.execute(u.input||{});}catch(e){out={erro:String(e)};}
+      const t=activeTools().find(t=>t.name===u.name); let out; try{out=await t.execute(u.input||{});}catch(e){out={erro:String(e)};}
       return {type:'tool_result',tool_use_id:u.id,content:JSON.stringify(out)};
     }))});
   }
