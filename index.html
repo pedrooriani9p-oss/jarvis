@@ -437,12 +437,13 @@ async function askViaApi(msgs, onText){
   const tools=activeTools().map(t=>({name:t.name,description:t.description,input_schema:t.inputSchema}));
   tools.push({type:'web_search_20260209',name:'web_search',max_uses:3,user_location:{type:'approximate',country:'BR',timezone:tz,...(store.get('jarvis_city')?{city:store.get('jarvis_city')}:{})}});
   let convo=msgs.map(m=>({role:m.role,content:m.content}));
+  const system=systemNow(); // fixo durante o pedido: o raciocínio do Claude fica preso ao prompt exato
   for(let round=0;round<8;round++){
     onText(round?'…':'…');
     const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01',
-        'anthropic-beta':'server-side-fallback-2026-07-01','anthropic-dangerous-direct-browser-access':'true'},
+        'anthropic-beta':'server-side-fallback-2026-07-01,thinking-binding-controls-2026-08-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({model:'claude-opus-5-5',max_tokens:4000,output_config:{effort:'low'},fallbacks:'default',
-        system:systemNow(),tools,messages:convo})});
+        thinking:{type:'adaptive',block_binding:{prefix_mismatch_behavior:'drop_block'}},system,tools,messages:convo})});
     const j=await r.json(); if(!r.ok) throw {code:'api',message:j.error?.message||r.status};
     if(j.stop_reason==='refusal') return 'Receio que não posso ajudar com isso, senhor.';
     const txt=j.content.filter(c=>c.type==='text').map(c=>c.text).join('').trim();
