@@ -78,6 +78,9 @@ small{color:var(--muted)}
       <label style="flex:1">Voz
         <select id="voiceSel"></select>
       </label>
+      <label>Motor de voz
+        <select id="engineSel"><option value="auto">Automático</option><option value="native">Navegador (Chrome/Edge)</option><option value="whisper">Whisper local (qualquer navegador)</option></select>
+      </label>
       <label><span>Falar respostas</span><input type="checkbox" id="speakOn" checked></label>
       <label><span>Sempre ouvindo ("Jarvis")</span><input type="checkbox" id="wakeOn"></label>
       <button type="button" class="btn" id="installBtn" style="display:none">INSTALAR APP</button>
@@ -164,41 +167,119 @@ function speak(text){
 
 // ---------- voice in ----------
 // Dois modos: toque no microfone (um comando) ou "sempre ouvindo", que espera a palavra "Jarvis".
+// Dois motores: o do navegador (Chrome/Edge) e um Whisper local que roda em qualquer navegador (Opera, Firefox...).
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-const WAKE=/\b(jarvis|jarbas|djarvis|jervis)\b[,.!]?\s*/i;
+const WAKE=/\b(jarvis|jarbas|djarvis|jervis|jarviz|javis)\b[,.!]?\s*/i;
 let rec=null, listening=false, mode='idle', armed=false, armTimer=null; // mode: idle | ptt | wake
 const wakeOn=()=>$('wakeOn').checked;
 $('wakeOn').checked=store.get('jarvis_wake')==='1';
-function startRec(m){ if(!rec||listening||busy||document.body.className==='speaking') return; mode=m; rec.continuous=(m==='wake'); try{rec.start();}catch(e){} }
-function stopRec(){ if(rec&&listening) try{rec.stop();}catch(e){} }
+const nativeOk = !!SR && !/OPR\/|Opera|Firefox|Brave/i.test(navigator.userAgent) && !navigator.brave;
+let engine = store.get('jarvis_engine') || 'auto';
+$('engineSel').value=engine;
+const useWhisper=()=> engine==='whisper' || (engine==='auto' && !nativeOk);
+$('engineSel').onchange=e=>{ stopRec(); engine=e.target.value; store.set('jarvis_engine',engine); add('sys','Motor de voz: '+(useWhisper()?'Whisper local':'navegador')+'.'); if(useWhisper()) loadAsr().catch(()=>{}); resumeWake(); };
+
+function startRec(m){ if(listening||busy||document.body.className==='speaking') return; mode=m; if(useWhisper()) return wStart(); if(!rec) return; rec.continuous=(m==='wake'); try{rec.start();}catch(e){} }
+function stopRec(){ if(!listening) return; if(useWhisper()) return wStop(); if(rec) try{rec.stop();}catch(e){} }
 function resumeWake(){ if(wakeOn()) setTimeout(()=>startRec('wake'),300); }
 function arm(){ armed=true; clearTimeout(armTimer); armTimer=setTimeout(()=>{armed=false;},8000); }
+function idleLabel(){ setState(mode==='wake'&&!armed?'':'listening'); if(mode==='wake') stateEl.textContent=armed?'OUVINDO…':'AGUARDANDO "JARVIS"'; }
+// texto final reconhecido, venha de qual motor vier
+function heard(said){
+  said=said.trim(); if(!said) return;
+  if(mode==='ptt'){ $('text').value=said; stopRec(); submit(); return; }
+  const m=said.match(WAKE); let cmd=null;
+  if(m) cmd=said.slice(m.index+m[0].length).replace(/^[\s,.!?]+/,'').trim(); else if(armed) cmd=said;
+  if(cmd===null) return;
+  if(!cmd || cmd.length<2){ arm(); stopRec(); $('text').value=''; speak('Pois não, senhor?').then(()=>startRec('wake')); return; }
+  armed=false; $('text').value=cmd; stopRec(); submit();
+}
+
+// --- motor 1: reconhecimento do navegador ---
 if(SR){
   rec=new SR(); rec.lang='pt-BR'; rec.interimResults=true;
-  rec.onstart=()=>{listening=true; setState(mode==='wake'&&!armed?'':'listening'); if(mode==='wake') stateEl.textContent=armed?'OUVINDO…':'AGUARDANDO "JARVIS"';};
+  rec.onstart=()=>{listening=true; idleLabel();};
   rec.onresult=e=>{
     const r=e.results[e.results.length-1], said=r[0].transcript.trim();
-    if(mode==='ptt'){ $('text').value=said; if(r.isFinal){ stopRec(); submit(); } return; }
-    // modo sempre ouvindo
-    const m=said.match(WAKE);
-    if(!r.isFinal){ if(m||armed){ setState('listening'); $('text').value=m?said.slice(m.index+m[0].length):said; } return; }
-    let cmd=null;
-    if(m) cmd=said.slice(m.index+m[0].length).trim(); else if(armed) cmd=said;
-    if(cmd===null) return;
-    if(!cmd){ arm(); stopRec(); $('text').value=''; speak('Pois não, senhor?').then(()=>startRec('wake')); return; }
-    armed=false; $('text').value=cmd; stopRec(); submit();
+    if(!r.isFinal){ if(mode==='ptt'||armed||WAKE.test(said)){ setState('listening'); $('text').value=said; } return; }
+    heard(said);
   };
-  rec.onerror=e=>{ if(e.error==='not-allowed'||e.error==='service-not-allowed'){ $('wakeOn').checked=false; add('sys','Microfone bloqueado aqui. Digite o comando, ou abra o Jarvis instalado no Chrome/Edge para usar a voz.'); } };
+  rec.onerror=e=>{
+    if(['network','service-not-allowed','language-not-supported'].includes(e.error) && engine==='auto'){ engine='whisper'; add('sys','O reconhecimento deste navegador falhou; mudei para o Whisper local.'); loadAsr().then(()=>startRec(mode==='idle'?'ptt':mode)); }
+    else if(e.error==='not-allowed'){ $('wakeOn').checked=false; add('sys','Microfone bloqueado. Libere o microfone para este site nas configurações do navegador.'); }
+  };
   rec.onend=()=>{ listening=false; if(document.body.className==='listening') setState(''); if(mode==='wake'&&!busy&&document.body.className!=='speaking') resumeWake(); };
-} else { $('micBtn').title='Reconhecimento de voz indisponível neste navegador (use Chrome ou Edge)'; $('micBtn').style.opacity=.4; }
-$('wakeOn').onchange=e=>{ store.set('jarvis_wake',e.target.checked?'1':'0'); if(!rec){ e.target.checked=false; return add('sys','Este navegador não reconhece voz. Use Chrome ou Edge.'); } if(e.target.checked) startRec('wake'); else { mode='idle'; stopRec(); setState(''); } };
+}
+
+// --- motor 2: Whisper local (transformers.js), com detecção de fala por volume ---
+const W={asr:null,loading:null,failedAt:0,stream:null,ctx:null,proc:null,active:false,inSpeech:false,chunks:[],pre:[],silent:0,len:0,noise:0.01,started:0,transcribing:false};
+const JUNK=/amara\.org|legendas pela|inscreva-se|obrigad[oa] por assistir|^\W*(m+|hum+|\.+)\W*$/i;
+function loadAsr(){
+  if(W.asr) return Promise.resolve(W.asr);
+  if(!W.loading && Date.now()-W.failedAt<30000) return Promise.reject(new Error('aguardando'));
+  if(!W.loading){
+    add('sys','Baixando o reconhecimento de voz (uns 80 MB, só na primeira vez)…');
+    W.loading=import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1').then(async T=>{
+      W.asr=await T.pipeline('automatic-speech-recognition','Xenova/whisper-base',{
+        progress_callback:p=>{ if(p.status==='progress' && /onnx/.test(p.file||'')) stateEl.textContent='CARREGANDO VOZ '+Math.round(p.progress||0)+'%'; }});
+      add('sys','Reconhecimento de voz pronto, senhor.'); if(!listening) setState(''); return W.asr;
+    }).catch(e=>{ W.loading=null; W.failedAt=Date.now(); add('sys','Não consegui baixar o reconhecimento de voz: '+(e.message||e)); throw e; });
+  }
+  return W.loading;
+}
+async function wStart(){
+  try{
+    loadAsr().catch(()=>{});
+    if(!W.stream){
+      W.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+      const AC=window.AudioContext||window.webkitAudioContext; let src;
+      try{ W.ctx=new AC({sampleRate:16000}); src=W.ctx.createMediaStreamSource(W.stream); }
+      catch(e){ W.ctx=new AC(); src=W.ctx.createMediaStreamSource(W.stream); } // Firefox: taxa nativa, reamostra depois
+      W.proc=W.ctx.createScriptProcessor(2048,1,1);
+      W.proc.onaudioprocess=e=>wChunk(e.inputBuffer.getChannelData(0));
+      src.connect(W.proc); W.proc.connect(W.ctx.destination);
+    }
+    if(W.ctx.state==='suspended') await W.ctx.resume();
+    W.active=true; W.inSpeech=false; W.chunks=[]; W.started=performance.now(); listening=true; idleLabel();
+  }catch(e){ listening=false; $('wakeOn').checked=false; add('sys','Não consegui acessar o microfone: '+(e.message||e.name)+'. Libere o microfone para este site.'); }
+}
+function wStop(){ W.active=false; W.inSpeech=false; listening=false; if(document.body.className==='listening') setState(''); }
+function wChunk(buf){
+  if(!W.active || W.transcribing || busy || document.body.className==='speaking') return;
+  const d=buf.slice(); let sum=0; for(let i=0;i<d.length;i++) sum+=d[i]*d[i];
+  const rms=Math.sqrt(sum/d.length), ms=d.length/W.ctx.sampleRate*1000, loud=rms>Math.max(0.015,W.noise*3);
+  if(!W.inSpeech){
+    W.noise=W.noise*0.95+rms*0.05; W.pre.push(d); if(W.pre.length>6) W.pre.shift();
+    if(loud){ W.inSpeech=true; W.chunks=W.pre.slice(); W.pre=[]; W.silent=0; W.len=0; if(mode==='ptt'||armed) setState('listening'); }
+    else if(mode==='ptt' && performance.now()-W.started>8000){ wStop(); add('sys','Não ouvi nada, senhor.'); }
+    return;
+  }
+  W.chunks.push(d); W.len+=ms; W.silent=loud?0:W.silent+ms;
+  if(W.silent>900 || W.len>12000) wFinish();
+}
+async function wFinish(){
+  const chunks=W.chunks; W.inSpeech=false; W.chunks=[];
+  const total=chunks.reduce((n,c)=>n+c.length,0); if(total<W.ctx.sampleRate*0.4) return;
+  const raw=new Float32Array(total); let o=0; for(const c of chunks){ raw.set(c,o); o+=c.length; }
+  const r=W.ctx.sampleRate/16000, audio=r===1?raw:Float32Array.from({length:Math.floor(total/r)},(_,i)=>raw[Math.floor(i*r)]);
+  W.transcribing=true; const prev=stateEl.textContent; stateEl.textContent='TRANSCREVENDO…';
+  try{
+    const asr=await loadAsr();
+    const out=await asr(audio,{language:'portuguese',task:'transcribe'});
+    const txt=(out.text||'').trim();
+    W.transcribing=false;
+    if(txt && !JUNK.test(txt)) heard(txt); else if(listening) idleLabel();
+  }catch(e){ W.transcribing=false; stateEl.textContent=prev; }
+}
+
+$('wakeOn').onchange=e=>{ store.set('jarvis_wake',e.target.checked?'1':'0'); if(!SR && !navigator.mediaDevices){ e.target.checked=false; return add('sys','Este navegador não dá acesso ao microfone.'); } if(e.target.checked) startRec('wake'); else { mode='idle'; stopRec(); setState(''); } };
 $('micBtn').onclick=()=>{
-  if(!rec) return add('sys','Este navegador não reconhece voz. Use Chrome ou Edge, ou digite.');
   speechSynthesis.cancel();
   if(listening && mode==='ptt') return stopRec();
   if(listening) { stopRec(); setTimeout(()=>startRec('ptt'),250); } else startRec('ptt');
 };
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden) resumeWake(); });
+if(useWhisper()) setTimeout(()=>loadAsr().catch(()=>{}),500);
 
 // ---------- install (PWA) ----------
 let installEvt=null;
