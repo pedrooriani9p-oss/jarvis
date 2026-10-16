@@ -16,3 +16,5 @@ Na primeira vez ele copia um código de pareamento: cole em CONFIG → "Código 
 A ponte escuta só em 127.0.0.1, aceita apenas o site do Jarvis com o código, e tem uma lista fixa de ações
 (abrir/fechar programas, volume, mídia, desligar/bloquear, print, pastas, procurar e abrir arquivos, digitar).
 Para tirar da inicialização do Windows: `JarvisPonte.exe --remover`.
+
+A ponte também ouve "Ei Jarvis" em segundo plano (openWakeWord, offline): traz a janela do Jarvis para frente e ele começa a ouvir o pedido. Dá para desligar em CONFIG.

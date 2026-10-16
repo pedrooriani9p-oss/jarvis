@@ -80,6 +80,7 @@ small{color:var(--muted)}
     <label>Código do PC (do programa Jarvis Ponte, para controlar o computador) <span id="pcInfo"></span>
       <input type="password" id="pcCode" placeholder="cole aqui o código que a ponte copiou">
     </label>
+    <div class="row" id="escutaBox" style="display:none"><label><span>Ouvir "Ei Jarvis" em segundo plano, mesmo minimizado (pela ponte) <span id="escutaInfo"></span></span><input type="checkbox" id="escutaOn"></label></div>
     <small><a id="ponteLink" style="color:var(--cyan)" href="https://github.com/pedrooriani9p-oss/jarvis/releases/download/ponte/JarvisPonte.exe">Baixar o Jarvis Ponte para Windows</a></small>
     <label>Chave da ElevenLabs (opcional, para vozes premium realistas; grátis em elevenlabs.io)
       <input type="password" id="elKey" placeholder="sk_...">
@@ -214,10 +215,42 @@ const activeTools=()=>pcOnline?TOOLS.concat(PC_TOOLS):TOOLS;
 async function checkPonte(){
   let st=null;
   try{ const r=await fetch(PONTE+'/status',{headers:{'x-jarvis-codigo':store.get('jarvis_pc')||''}}); st=await r.json(); }catch(e){}
-  const was=pcOnline; pcOnline=!!(st&&st.pareado);
+  const was=pcOnline; pcOnline=!!(st&&st.pareado); ponteEscuta=pcOnline?st.escuta:null; renderEscuta();
+  if(ponteOuvindo() && listening && mode==='wake'){ mode='idle'; stopRec(); }
   $('pcBadge').textContent=pcOnline?'PC ●':'PC ○'; $('pcBadge').style.color=pcOnline?'var(--cyan)':'';
   $('pcInfo').textContent=pcOnline?'· conectado ✓':(st?'· ponte encontrada, código errado':'· ponte não encontrada');
-  if(pcOnline&&!was) add('sys','Controle do PC conectado. Tente: "Jarvis, abre a calculadora".');
+  if(pcOnline&&!was){ add('sys','Controle do PC conectado. Tente: "Jarvis, abre a calculadora".'); pollEvents(); }
+}
+// chamado por voz pela ponte: "Ei Jarvis" em segundo plano, mesmo minimizado
+let ponteEscuta=null, evPolling=false;
+const ponteOuvindo=()=> !!(pcOnline && ponteEscuta && ponteEscuta.ligada && ponteEscuta.status==='ouvindo');
+function renderEscuta(){
+  const box=$('escutaBox'); if(!box) return; box.style.display=pcOnline&&ponteEscuta?'':'none';
+  if(ponteEscuta){ $('escutaOn').checked=ponteEscuta.ligada; $('escutaInfo').textContent='· '+ponteEscuta.status; }
+}
+$('escutaOn').onchange=async e=>{ try{ const r=await ponte('escuta',{acao:e.target.checked?'ligar':'desligar'}); ponteEscuta={ligada:r.ligada,status:r.status}; renderEscuta(); }catch(err){} };
+function beep(){
+  try{ const c=new (window.AudioContext||window.webkitAudioContext)(), o=c.createOscillator(), g=c.createGain();
+    o.frequency.value=880; g.gain.setValueAtTime(.15,c.currentTime); g.gain.exponentialRampToValueAtTime(.001,c.currentTime+.18);
+    o.connect(g); g.connect(c.destination); o.start(); o.stop(c.currentTime+.2); }catch(e){}
+}
+function onWakeFromPonte(){
+  if(busy) return;
+  stopSpeaking(); if(listening) stopRec();
+  beep(); setTimeout(()=>startRec('ptt'),250);
+}
+async function pollEvents(){
+  if(evPolling) return; evPolling=true;
+  const hdr={headers:{'x-jarvis-codigo':store.get('jarvis_pc')||''}};
+  let last=0;
+  try{ last=(await (await fetch(PONTE+'/eventos?desde=-1',hdr)).json()).ultimo||0; }catch(e){}
+  while(pcOnline){
+    try{
+      const j=await (await fetch(PONTE+'/eventos?desde='+last,hdr)).json();
+      for(const ev of (j.eventos||[])){ last=Math.max(last,ev.id); if(ev.tipo==='wake' && Date.now()/1000-ev.em<10) onWakeFromPonte(); }
+    }catch(e){ await new Promise(r=>setTimeout(r,3000)); }
+  }
+  evPolling=false;
 }
 $('pcCode').value=store.get('jarvis_pc')||'';
 $('pcCode').onchange=e=>{ store.set('jarvis_pc',e.target.value.trim()); checkPonte(); };
@@ -316,7 +349,7 @@ $('engineSel').onchange=e=>{ stopRec(); engine=e.target.value; store.set('jarvis
 
 function startRec(m){ if(listening||busy||document.body.className==='speaking') return; mode=m; if(useWhisper()) return wStart(); if(!rec) return; rec.continuous=(m==='wake'); try{rec.start();}catch(e){} }
 function stopRec(){ if(!listening) return; if(useWhisper()) return wStop(); if(rec) try{rec.stop();}catch(e){} }
-function resumeWake(){ if(wakeOn()) setTimeout(()=>startRec('wake'),300); }
+function resumeWake(){ if(wakeOn() && !(typeof ponteOuvindo==='function' && ponteOuvindo())) setTimeout(()=>startRec('wake'),300); }
 function arm(){ armed=true; clearTimeout(armTimer); armTimer=setTimeout(()=>{armed=false;},8000); }
 function idleLabel(){ setState(mode==='wake'&&!armed?'':'listening'); if(mode==='wake') stateEl.textContent=armed?'OUVINDO…':'AGUARDANDO "JARVIS"'; }
 // texto final reconhecido, venha de qual motor vier

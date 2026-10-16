@@ -6,11 +6,12 @@ Segurança, por design:
   gerado na primeira execução;
 - não existe "rodar comando": só uma lista fixa de ações, sem shell, com entradas validadas;
 - arquivos e pastas só dentro da pasta do usuário, e nunca executáveis ou scripts.
-Usa só a biblioteca padrão do Python, para virar um .exe pequeno com PyInstaller.
+- a escuta de "Jarvis" roda offline (Vosk), só reconhece a palavra de ativação e não grava nada.
 """
 import base64
 import ctypes
 import tempfile
+import threading
 import glob
 import hmac
 import json
@@ -23,9 +24,11 @@ import sys
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 PORT = 47800
-VERSION = "1.1.0"
+VERSION = "1.2.0"
+SITE = "https://pedrooriani9p-oss.github.io/jarvis/"
 ALLOWED_ORIGINS = {"https://pedrooriani9p-oss.github.io"}
 IS_WIN = os.name == "nt"
 HOME = os.path.realpath(os.path.expanduser("~"))
@@ -296,6 +299,65 @@ def digitar(texto):
     return {"ok": True}
 
 
+# ---------- chamado por voz ("Jarvis") ----------
+
+EVENTS = []          # [(id, tipo, horário)]
+EVENTS_COND = threading.Condition()
+ESCUTA = None
+
+
+def push_event(tipo):
+    with EVENTS_COND:
+        eid = (EVENTS[-1][0] + 1) if EVENTS else 1
+        EVENTS.append((eid, tipo, time.time()))
+        del EVENTS[:-50]
+        EVENTS_COND.notify_all()
+
+
+def focus_jarvis():
+    """Traz a janela do Jarvis para frente; se não estiver aberta, abre o site."""
+    if not IS_WIN:
+        return False
+    u = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def cb(hwnd, _):
+        n = u.GetWindowTextLengthW(hwnd)
+        if n and u.IsWindowVisible(hwnd):
+            buf = ctypes.create_unicode_buffer(n + 1)
+            u.GetWindowTextW(hwnd, buf, n + 1)
+            if "J.A.R.V.I.S." in buf.value:
+                found.append(hwnd)
+        return True
+
+    u.EnumWindows(cb, 0)
+    if not found:
+        os.startfile(SITE)
+        return False
+    hwnd = found[0]
+    if u.IsIconic(hwnd):
+        u.ShowWindow(hwnd, 9)  # SW_RESTORE
+    u.keybd_event(0x12, 0, 0, 0); u.keybd_event(0x12, 0, 2, 0)  # Alt: o Windows libera trocar o foco
+    u.SetForegroundWindow(hwnd)
+    return True
+
+
+def on_wake():
+    focus_jarvis()
+    push_event("wake")
+
+
+def escuta(acao):
+    if ESCUTA is None:
+        return {"ok": False, "erro": "escuta indisponível nesta ponte"}
+    if acao in ("ligar", "desligar"):
+        ESCUTA.enabled = acao == "ligar"
+        with open(os.path.join(DATA_DIR, "escuta.txt"), "w") as fh:
+            fh.write("1" if ESCUTA.enabled else "0")
+    return {"ok": True, "ligada": ESCUTA.enabled, "status": ESCUTA.status}
+
+
 ACTIONS = {
     "abrir_programa": lambda a: abrir_programa(str(a["nome"])),
     "fechar_programa": lambda a: fechar_programa(str(a["nome"])),
@@ -309,6 +371,8 @@ ACTIONS = {
     "abrir_arquivo": lambda a: abrir_arquivo(str(a["caminho"])),
     "info_sistema": lambda a: info_sistema(),
     "digitar": lambda a: digitar(str(a["texto"])),
+    "escuta": lambda a: escuta(a.get("acao", "status")),
+    "focar_jarvis": lambda a: {"ok": focus_jarvis()},
 }
 
 # ---------- servidor ----------
@@ -346,11 +410,27 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path != "/status":
-            return self._send(404, {"erro": "não encontrado"})
+        url = urlparse(self.path)
         if not self._origin_ok():
             return self._send(403, {"erro": "origem não permitida"})
-        self._send(200, {"ok": True, "versao": VERSION, "pareado": self._auth_ok()})
+        if url.path == "/status":
+            esc = {"ligada": ESCUTA.enabled, "status": ESCUTA.status} if ESCUTA else None
+            return self._send(200, {"ok": True, "versao": VERSION, "pareado": self._auth_ok(), "escuta": esc})
+        if url.path == "/eventos":
+            # long-poll: devolve os chamados com id > desde, esperando até 25 s por um novo
+            if not self._auth_ok():
+                return self._send(403, {"ok": False, "erro": "código de pareamento inválido"})
+            try:
+                desde = int(parse_qs(url.query).get("desde", ["0"])[0])
+            except ValueError:
+                desde = 0
+            with EVENTS_COND:
+                if desde < 0:  # primeira conexão: só quer saber o último id
+                    return self._send(200, {"ok": True, "ultimo": EVENTS[-1][0] if EVENTS else 0, "eventos": []})
+                EVENTS_COND.wait_for(lambda: EVENTS and EVENTS[-1][0] > desde, timeout=25)
+                evs = [{"id": i, "tipo": t, "em": h} for i, t, h in EVENTS if i > desde]
+            return self._send(200, {"ok": True, "eventos": evs})
+        self._send(404, {"erro": "não encontrado"})
 
     def do_POST(self):
         if not self._auth_ok():
@@ -382,10 +462,20 @@ def main():
         return msgbox("O Jarvis Ponte já está rodando.")
     TOKEN, first = load_token()
     set_startup(True)
+    global ESCUTA
+    try:
+        from escuta import Escuta
+        ESCUTA = Escuta(on_wake)
+        f = os.path.join(DATA_DIR, "escuta.txt")
+        ESCUTA.enabled = not (os.path.exists(f) and open(f).read().strip() == "0")
+        ESCUTA.start()
+    except Exception:
+        ESCUTA = None
     if first or "--codigo" in sys.argv:
         copy_to_clipboard(TOKEN)
         msgbox("Jarvis Ponte ativa!\n\nSeu código de pareamento já foi COPIADO:\n\n" + TOKEN +
                "\n\nAbra o Jarvis, vá em CONFIG e cole (Ctrl+V) no campo \"Código do PC\".\n"
+               "Depois é só dizer \"Jarvis\" que ele atende, mesmo minimizado.\n"
                "A ponte vai iniciar sozinha junto com o Windows.")
     server.serve_forever()
 

@@ -17,8 +17,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pyinstaller==6.11.1
-      - run: pyinstaller --onefile --noconsole --name JarvisPonte ponte/jarvis_ponte.py
+      - name: Instalar dependências
+        run: |
+          pip install pyinstaller==6.11.1 sounddevice==0.5.1 onnxruntime numpy scipy scikit-learn tqdm requests
+          pip install --no-deps openwakeword==0.6.0
+      - name: Baixar o modelo "Hey Jarvis" e testar que carrega
+        shell: bash
+        run: |
+          python -c "import openwakeword.utils as u; u.download_models(model_names=['hey_jarvis'])"
+          python -c "import sys; sys.path.insert(0,'ponte'); import escuta, numpy as np; d=escuta.Detector(escuta.make_model()); print('detector ok', d.feed(np.zeros(1280, np.int16)))"
+          mkdir oww_models
+          M=$(python -c "import openwakeword,os; print(os.path.join(os.path.dirname(openwakeword.__file__),'resources','models'))")
+          cp "$M"/hey_jarvis_v0.1.onnx "$M"/melspectrogram.onnx "$M"/embedding_model.onnx oww_models/
+      - name: Gerar o .exe
+        run: pyinstaller --onefile --noconsole --name JarvisPonte --paths ponte --add-data "oww_models;oww_models" --hidden-import escuta ponte/jarvis_ponte.py
       - name: Publicar na release "ponte"
         shell: bash
         env:
