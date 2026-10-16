@@ -4,7 +4,8 @@ Assistente pessoal estilo Homem de Ferro: interface HUD, voz (ouvir e falar) e c
 
 - Instalável no celular e no PC (PWA).
 - Modo "Sempre ouvindo": com o app aberto, diga "Jarvis, ..." e ele responde.
-- Ferramentas: hora, abrir sites, timers com aviso falado, notas.
+- Ferramentas: hora, abrir sites, timers com aviso falado, notas, pesquisa na web, memória e visão da tela.
+- "Bom dia, senhor": resumo falado do dia (clima, notícias, notas) na primeira abertura do dia.
 
 Para usar fora do claude.ai, abra CONFIG e informe sua chave da API Anthropic (fica salva só no seu navegador).
 

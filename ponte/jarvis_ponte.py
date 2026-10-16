@@ -8,7 +8,9 @@ Segurança, por design:
 - arquivos e pastas só dentro da pasta do usuário, e nunca executáveis ou scripts.
 Usa só a biblioteca padrão do Python, para virar um .exe pequeno com PyInstaller.
 """
+import base64
 import ctypes
+import tempfile
 import glob
 import hmac
 import json
@@ -23,7 +25,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 47800
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 ALLOWED_ORIGINS = {"https://pedrooriani9p-oss.github.io"}
 IS_WIN = os.name == "nt"
 HOME = os.path.realpath(os.path.expanduser("~"))
@@ -200,6 +202,35 @@ def print_tela():
     return {"ok": False, "erro": (r.stderr or "falhou").strip()[:200]}
 
 
+def capturar_tela():
+    """Captura a tela reduzida (até 1568 px) em JPEG e devolve em base64, para o Jarvis "ver"."""
+    fd, path = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)
+    script = ("Add-Type -AssemblyName System.Windows.Forms,System.Drawing;"
+              "$b=[System.Windows.Forms.SystemInformation]::VirtualScreen;"
+              "$i=New-Object System.Drawing.Bitmap $b.Width,$b.Height;"
+              "$g=[System.Drawing.Graphics]::FromImage($i);$g.CopyFromScreen($b.Left,$b.Top,0,0,$i.Size);"
+              "$s=[Math]::Min(1,1568/$b.Width);$w=[int]($b.Width*$s);$h=[int]($b.Height*$s);"
+              "$o=New-Object System.Drawing.Bitmap $i,$w,$h;"
+              "$c=[System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders()|?{$_.MimeType -eq 'image/jpeg'};"
+              "$p=New-Object System.Drawing.Imaging.EncoderParameters 1;"
+              "$p.Param[0]=New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality,[long]70);"
+              "$o.Save($env:JARVIS_PRINT,$c,$p)")
+    env = dict(os.environ, JARVIS_PRINT=path)
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", script], env=env,
+                           capture_output=True, text=True, creationflags=NO_WINDOW, timeout=30)
+        if r.returncode != 0 or not os.path.getsize(path):
+            return {"ok": False, "erro": (r.stderr or "falhou").strip()[:200]}
+        with open(path, "rb") as fh:
+            return {"ok": True, "imagem": base64.b64encode(fh.read()).decode()}
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def abrir_pasta(nome):
     n = nome.strip().lower()
     path = inside_home(os.path.join(HOME, FOLDERS[n]) if n in FOLDERS else nome)
@@ -272,6 +303,7 @@ ACTIONS = {
     "midia": lambda a: midia(a["acao"]),
     "energia": lambda a: energia(a["acao"]),
     "print_tela": lambda a: print_tela(),
+    "capturar_tela": lambda a: capturar_tela(),
     "abrir_pasta": lambda a: abrir_pasta(str(a["nome"])),
     "procurar_arquivos": lambda a: procurar_arquivos(str(a["termo"])),
     "abrir_arquivo": lambda a: abrir_arquivo(str(a["caminho"])),

@@ -63,6 +63,9 @@ body.listening .mic{border-color:var(--gold);color:var(--gold);background:rgba(2
 .settings .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 select{background:rgba(0,30,45,.7);border:1px solid var(--line);color:var(--text);padding:8px;border-radius:4px;font:inherit}
 small{color:var(--muted)}
+.memrow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line)}
+#memList{max-height:160px;overflow-y:auto;font-size:15px}
+.briefbtn{display:block;margin:0 auto}
 </style>
 </head>
 <body>
@@ -93,6 +96,14 @@ small{color:var(--muted)}
       <label><span>Sempre ouvindo ("Jarvis")</span><input type="checkbox" id="wakeOn"></label>
       <button type="button" class="btn" id="installBtn" style="display:none">INSTALAR APP</button>
     </div>
+    <div class="row">
+      <label style="flex:1">Sua cidade (para clima e notícias locais)
+        <input type="text" id="cityIn" placeholder="ex: São Paulo">
+      </label>
+      <label><span>"Bom dia" automático</span><input type="checkbox" id="briefOn"></label>
+      <button type="button" class="btn" id="briefBtn">BOM DIA AGORA</button>
+    </div>
+    <div>O que o Jarvis sabe sobre você (fica neste aparelho):<div id="memList"></div></div>
     <small>Toque no microfone para falar. Com "Sempre ouvindo" ligado, basta dizer "Jarvis" (ex: "Jarvis, que horas são?") enquanto o app estiver aberto.</small>
   </div>
 
@@ -121,10 +132,44 @@ const store = { get(k){try{return localStorage.getItem(k)}catch(e){return null}}
 
 const SYSTEM = `Você é J.A.R.V.I.S., a inteligência artificial pessoal criada por Tony Stark, agora servindo ao usuário.
 Personalidade: educado, britânico no estilo, levemente irônico e espirituoso, sempre leal e eficiente. Chame o usuário de "senhor".
-Responda em português do Brasil, de forma curta e falada (1 a 3 frases), porque sua resposta será lida em voz alta. Sem markdown, sem listas, sem emojis.
-Use as ferramentas quando ajudarem (hora, abrir sites, timers, notas e, se disponíveis, controle do PC). Antes de desligar, reiniciar ou fechar programas, confirme com o usuário. Data/hora local atual: `;
+Responda em português do Brasil, de forma curta e falada (1 a 3 frases), porque sua resposta será lida em voz alta. Sem markdown, sem listas, sem emojis, sem links ou citações de fontes.
+Use as ferramentas quando ajudarem: hora, abrir sites, timers, notas, pesquisa na web (clima, notícias, resultados, preços, qualquer coisa atual) e, se disponíveis, controle do PC e visão da tela. Antes de desligar, reiniciar ou fechar programas, confirme com o usuário. Só olhe a tela quando o usuário pedir.
+Memória: quando o usuário contar algo duradouro sobre ele (nome, cidade, gostos, rotina, pessoas, objetivos) ou pedir para lembrar de algo, use a ferramenta memorizar sem anunciar demais. Se ele pedir para esquecer, use esquecer.`;
+function systemNow(){
+  const mem=loadMem(), city=store.get('jarvis_city');
+  return SYSTEM+'\n\nData/hora local atual: '+new Date().toLocaleString('pt-BR',{dateStyle:'full',timeStyle:'short'})+'.'+
+    (city?'\nCidade do usuário: '+city+'.':'')+
+    (mem.length?'\n\nO que você já sabe sobre o usuário:\n'+mem.map(m=>'- '+m.fato).join('\n'):'');
+}
 
 // ---------- tools (page functions Claude can call) ----------
+// ---------- memória (neste aparelho) ----------
+function loadMem(){ try{ return JSON.parse(store.get('jarvis_mem')||'[]'); }catch(e){ return []; } }
+function saveMem(m){ store.set('jarvis_mem',JSON.stringify(m.slice(-200))); }
+function renderMem(){
+  const box=document.getElementById('memList'); if(!box) return; const m=loadMem(); box.innerHTML='';
+  if(!m.length){ box.textContent='Nada ainda. Conte coisas sobre você e ele vai lembrando.'; return; }
+  m.forEach((x,i)=>{ const row=document.createElement('div'); row.className='memrow'; const t=document.createElement('span'); t.textContent=x.fato;
+    const b=document.createElement('button'); b.className='gear'; b.textContent='✕'; b.title='Esquecer'; b.onclick=()=>{ const k=loadMem(); k.splice(i,1); saveMem(k); renderMem(); };
+    row.append(t,b); box.append(row); });
+}
+
+// ---------- visão da tela ----------
+// Pela ponte (sem perguntar nada) ou, sem ponte, pelo compartilhamento de tela do navegador.
+async function captureScreen(){
+  if(typeof pcOnline!=='undefined' && pcOnline){
+    const r=await ponte('capturar_tela',{}); if(r.ok&&r.imagem) return {__image:r.imagem, info:'captura da tela do PC'};
+  }
+  if(!navigator.mediaDevices?.getDisplayMedia) return {erro:'este aparelho não permite capturar a tela'};
+  const stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});
+  try{
+    const v=document.createElement('video'); v.srcObject=stream; v.muted=true; await v.play(); await new Promise(r=>setTimeout(r,300));
+    const sc=Math.min(1,1568/v.videoWidth), c=document.createElement('canvas'); c.width=Math.round(v.videoWidth*sc); c.height=Math.round(v.videoHeight*sc);
+    c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+    return {__image:c.toDataURL('image/jpeg',0.7).split(',')[1], info:'captura da tela'};
+  } finally { stream.getTracks().forEach(t=>t.stop()); }
+}
+
 const notes = JSON.parse(store.get('jarvis_notes') || '[]');
 const TOOLS = [
   { name:'hora_atual', description:'Retorna data e hora locais do usuário.', inputSchema:{type:'object',properties:{}},
@@ -136,6 +181,12 @@ const TOOLS = [
   { name:'salvar_nota', description:'Salva uma nota/lembrete do usuário neste navegador.', inputSchema:{type:'object',properties:{texto:{type:'string'}},required:['texto']},
     execute:({texto})=>{ notes.push({texto,em:new Date().toISOString()}); store.set('jarvis_notes',JSON.stringify(notes)); return {ok:true,total:notes.length}; } },
   { name:'listar_notas', description:'Lista as notas salvas.', inputSchema:{type:'object',properties:{}}, execute:()=>({notas:notes}) },
+  { name:'memorizar', description:'Guarda um fato duradouro sobre o usuário (ex: "O nome dele é Pedro", "Torce para o Palmeiras").', inputSchema:{type:'object',properties:{fato:{type:'string'}},required:['fato']},
+    execute:({fato})=>{ const m=loadMem(); if(!m.some(x=>x.fato===fato)) m.push({fato,em:new Date().toISOString()}); saveMem(m); renderMem(); return {ok:true,total:m.length}; } },
+  { name:'esquecer', description:'Apaga memórias que contenham o trecho informado.', inputSchema:{type:'object',properties:{trecho:{type:'string'}},required:['trecho']},
+    execute:({trecho})=>{ const m=loadMem(), t=trecho.toLowerCase(), k=m.filter(x=>!x.fato.toLowerCase().includes(t)); saveMem(k); renderMem(); return {ok:true,apagadas:m.length-k.length}; } },
+  { name:'ver_tela', description:'Captura a tela do usuário para você ver o que está nela. Use só quando ele pedir (ex: "o que tem na minha tela?", "me ajuda com isso aqui").', inputSchema:{type:'object',properties:{}},
+    execute:()=>captureScreen() }
 ];
 
 // ---------- controle do PC (via programa Jarvis Ponte, rodando no próprio computador) ----------
@@ -376,24 +427,33 @@ function refreshBrain(){
     : (store.get('jarvis_key') ? 'Claude via chave de API' : 'sem conexão: informe uma chave de API');
 }
 async function askViaSample(msgs, onText){
-  const turns = msgs.map((m,i)=> i===0 && m.role==='user' ? {...m, content: SYSTEM+new Date().toLocaleString('pt-BR')+'\n\nUsuário: '+m.content} : m);
-  const {text}=await sample(turns,{tools:activeTools(), modelTier:'quick', cache:false, onText:({text})=>onText(text)});
+  const turns = msgs.map((m,i)=> i===0 && m.role==='user' ? {...m, content: systemNow()+'\n\nUsuário: '+m.content} : m);
+  const {text}=await sample(turns,{tools:activeTools().filter(t=>t.name!=='ver_tela'), modelTier:'quick', cache:false, onText:({text})=>onText(text)});
   return text;
 }
 async function askViaApi(msgs, onText){
   const key=store.get('jarvis_key'); if(!key) throw {code:'no_key'};
+  const tz=Intl.DateTimeFormat().resolvedOptions().timeZone;
   const tools=activeTools().map(t=>({name:t.name,description:t.description,input_schema:t.inputSchema}));
+  tools.push({type:'web_search_20260209',name:'web_search',max_uses:3,user_location:{type:'approximate',country:'BR',timezone:tz,...(store.get('jarvis_city')?{city:store.get('jarvis_city')}:{})}});
   let convo=msgs.map(m=>({role:m.role,content:m.content}));
-  for(let round=0;round<5;round++){
-    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:600,system:SYSTEM+new Date().toLocaleString('pt-BR'),tools,messages:convo})});
+  for(let round=0;round<8;round++){
+    onText(round?'…':'…');
+    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01',
+        'anthropic-beta':'server-side-fallback-2026-07-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:'claude-opus-5-5',max_tokens:4000,output_config:{effort:'low'},fallbacks:'default',
+        system:systemNow(),tools,messages:convo})});
     const j=await r.json(); if(!r.ok) throw {code:'api',message:j.error?.message||r.status};
+    if(j.stop_reason==='refusal') return 'Receio que não posso ajudar com isso, senhor.';
+    const txt=j.content.filter(c=>c.type==='text').map(c=>c.text).join('').trim();
     const uses=j.content.filter(c=>c.type==='tool_use');
-    const txt=j.content.filter(c=>c.type==='text').map(c=>c.text).join(' ').trim();
+    if(j.stop_reason==='pause_turn'){ convo.push({role:'assistant',content:j.content}); continue; } // pesquisa longa: continua
     if(!uses.length){ onText(txt); return txt; }
     convo.push({role:'assistant',content:j.content});
     convo.push({role:'user',content:await Promise.all(uses.map(async u=>{
-      const t=activeTools().find(t=>t.name===u.name); let out; try{out=await t.execute(u.input||{});}catch(e){out={erro:String(e)};}
+      const t=activeTools().find(t=>t.name===u.name); let out;
+      try{ out=await t.execute(u.input||{}); }catch(e){ return {type:'tool_result',tool_use_id:u.id,is_error:true,content:String(e.message||e)}; }
+      if(out&&out.__image) return {type:'tool_result',tool_use_id:u.id,content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:out.__image}},{type:'text',text:out.info||'tela'}]};
       return {type:'tool_result',tool_use_id:u.id,content:JSON.stringify(out)};
     }))});
   }
@@ -402,15 +462,21 @@ async function askViaApi(msgs, onText){
 const ERR={not_granted:'Preciso da sua permissão para usar o Claude, senhor. Recarregue e permita.',rate_limited:'Muitos pedidos seguidos, senhor. Um momento.',
   no_key:'Estou sem cérebro conectado, senhor. Abra CONFIG e informe uma chave de API.'};
 let busy=false;
-async function submit(){
-  let q=$('text').value.trim(); if(!q||busy) return;
+async function submit(hidden){
+  let q=$('text').value.trim(); if(!q||busy) return; hidden=hidden===true;
   q=q.replace(/^(ok |ei |hey )?jarvis[,!]?\s*/i,'')||q; $('text').value='';
-  add('user',q); history.push({role:'user',content:q}); while(history.length>16 || (history.length && history[0].role!=="user")) history.shift();
+  add('user',hidden?'☀️ Resumo do dia':q); history.push({role:'user',content:q}); while(history.length>16 || (history.length && history[0].role!=="user")) history.shift();
   busy=true; setState('thinking'); const el=add('jarvis','…'); const body=el.lastChild;
   try{
     const ans = sample ? await askViaSample(history, t=>body.textContent=t) : await askViaApi(history, t=>body.textContent=t);
     body.textContent=ans; history.push({role:'assistant',content:ans});
-    busy=false; await speak(ans);
+    busy=false;
+    if(hidden && navigator.userActivation && !navigator.userActivation.hasBeenActive){
+      // o navegador não deixa falar antes de você tocar na página: oferece um botão
+      const b=document.createElement('button'); b.className='btn briefbtn'; b.textContent='▶ OUVIR RESUMO';
+      b.onclick=()=>{ b.remove(); speak(ans).then(resumeWake); }; el.append(b); return;
+    }
+    await speak(ans);
     resumeWake();
   }catch(e){
     history.pop(); const m=ERR[e.code]||('Falha nos sistemas, senhor: '+(e.message||e.code||e)); body.textContent=m; busy=false; speak(m).then(resumeWake);
@@ -418,8 +484,31 @@ async function submit(){
 }
 $('form').onsubmit=e=>{e.preventDefault();submit();};
 
+// ---------- "Bom dia, senhor" ----------
+// Na primeira abertura do dia, o Jarvis faz um resumo falado: saudação, clima, notícias e notas.
+$('cityIn').value=store.get('jarvis_city')||''; $('cityIn').onchange=e=>store.set('jarvis_city',e.target.value.trim());
+$('briefOn').checked=store.get('jarvis_brief')!=='0'; $('briefOn').onchange=e=>store.set('jarvis_brief',e.target.checked?'1':'0');
+renderMem();
+function briefingPrompt(){
+  const h=new Date().getHours(), saud=h<12?'bom dia':h<18?'boa tarde':'boa noite', city=store.get('jarvis_city');
+  return `[Resumo automático ao iniciar] Faça o briefing de ${saud} do senhor, em até 6 frases faladas e naturais: cumprimente pelo nome se souber, diga a data, `+
+    (city?`pesquise e diga o clima de hoje em ${city} (temperatura e chance de chuva), `:'')+
+    `pesquise e conte 2 notícias importantes do Brasil hoje (uma frase cada)`+(notes.length?`, e lembre as notas salvas que ainda pareçam relevantes`:'')+`. Termine perguntando como pode ajudar.`;
+}
+async function briefing(){
+  if(busy) return;
+  if(!sample && !store.get('jarvis_key')) return;
+  store.set('jarvis_brief_day',new Date().toDateString());
+  $('text').value=briefingPrompt(); await submit(true);
+}
+$('briefBtn').onclick=()=>briefing();
+function maybeBriefing(){
+  if(store.get('jarvis_brief')==='0' || store.get('jarvis_brief_day')===new Date().toDateString()) return;
+  setTimeout(briefing,1500);
+}
+
 add('sys','Sistemas online. Toque no microfone, digite, ou ligue "Sempre ouvindo" em CONFIG e diga "Jarvis". Tente: "Que horas são?", "Abra o YouTube", "Me lembre em 1 minuto de beber água".');
-initBrain();
+initBrain().then(maybeBriefing);
 if(wakeOn()) setTimeout(()=>startRec('wake'),800);
 </script>
 </body>
