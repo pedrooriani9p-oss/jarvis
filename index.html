@@ -90,7 +90,7 @@ small{color:var(--muted)}
       </label>
       <button type="button" class="btn" id="testVoice">TESTAR VOZ</button>
       <label>Motor de voz
-        <select id="engineSel"><option value="auto">Automático</option><option value="native">Navegador (Chrome/Edge)</option><option value="whisper">Whisper local (qualquer navegador)</option></select>
+        <select id="engineSel"><option value="auto">Automático</option><option value="native">Navegador (Chrome/Edge)</option><option value="whisper">Whisper rápido (local, 80 MB)</option><option value="whisper-small">Whisper preciso (local, 250 MB)</option><option value="scribe">ElevenLabs Scribe (nuvem, o mais preciso)</option></select>
       </label>
       <label><span>Falar respostas</span><input type="checkbox" id="speakOn" checked></label>
       <label><span>Sempre ouvindo ("Jarvis")</span><input type="checkbox" id="wakeOn"></label>
@@ -308,8 +308,11 @@ $('wakeOn').checked=store.get('jarvis_wake')==='1';
 const nativeOk = !!SR && !/OPR\/|Opera|Firefox|Brave/i.test(navigator.userAgent) && !navigator.brave;
 let engine = store.get('jarvis_engine') || 'auto';
 $('engineSel').value=engine;
-const useWhisper=()=> engine==='whisper' || (engine==='auto' && !nativeOk);
-$('engineSel').onchange=e=>{ stopRec(); engine=e.target.value; store.set('jarvis_engine',engine); add('sys','Motor de voz: '+(useWhisper()?'Whisper local':'navegador')+'.'); if(useWhisper()) loadAsr().catch(()=>{}); resumeWake(); };
+const useWhisper=()=> ['whisper','whisper-small','scribe'].includes(engine) || (engine==='auto' && !nativeOk);
+// no automático sem reconhecimento do navegador: Scribe se houver chave da ElevenLabs, senão Whisper preciso
+const sttKind=()=> engine==='scribe'||(engine==='auto'&&!nativeOk&&store.get('jarvis_elkey'))?'scribe': engine==='whisper'?'whisper':'whisper-small';
+const ENGINE_NAME={whisper:'Whisper rápido',['whisper-small']:'Whisper preciso',scribe:'ElevenLabs Scribe'};
+$('engineSel').onchange=e=>{ stopRec(); engine=e.target.value; store.set('jarvis_engine',engine); add('sys','Motor de voz: '+(useWhisper()?ENGINE_NAME[sttKind()]:'navegador')+'.'); if(useWhisper()&&sttKind()!=='scribe') loadAsr().catch(()=>{}); resumeWake(); };
 
 function startRec(m){ if(listening||busy||document.body.className==='speaking') return; mode=m; if(useWhisper()) return wStart(); if(!rec) return; rec.continuous=(m==='wake'); try{rec.start();}catch(e){} }
 function stopRec(){ if(!listening) return; if(useWhisper()) return wStop(); if(rec) try{rec.stop();}catch(e){} }
@@ -329,10 +332,11 @@ function heard(said){
 
 // --- motor 1: reconhecimento do navegador ---
 if(SR){
-  rec=new SR(); rec.lang='pt-BR'; rec.interimResults=true;
+  rec=new SR(); rec.lang='pt-BR'; rec.interimResults=true; rec.maxAlternatives=3;
   rec.onstart=()=>{listening=true; idleLabel();};
   rec.onresult=e=>{
-    const r=e.results[e.results.length-1], said=r[0].transcript.trim();
+    const r=e.results[e.results.length-1]; let said=r[0].transcript.trim();
+    if(mode==='wake') for(let k=0;k<r.length;k++) if(WAKE.test(r[k].transcript)){ said=r[k].transcript.trim(); break; }
     if(!r.isFinal){ if(mode==='ptt'||armed||WAKE.test(said)){ setState('listening'); $('text').value=said; } return; }
     heard(said);
   };
@@ -344,24 +348,46 @@ if(SR){
 }
 
 // --- motor 2: Whisper local (transformers.js), com detecção de fala por volume ---
-const W={asr:null,loading:null,failedAt:0,stream:null,ctx:null,proc:null,active:false,inSpeech:false,chunks:[],pre:[],silent:0,len:0,noise:0.01,started:0,transcribing:false};
+const W={asr:null,model:'',loading:null,failedAt:0,stream:null,ctx:null,proc:null,active:false,inSpeech:false,chunks:[],pre:[],silent:0,len:0,noise:0.01,started:0,transcribing:false};
 const JUNK=/amara\.org|legendas pela|inscreva-se|obrigad[oa] por assistir|^\W*(m+|hum+|\.+)\W*$/i;
 function loadAsr(){
+  const model=sttKind()==='whisper'?'Xenova/whisper-base':'Xenova/whisper-small';
+  if(W.model!==model){ W.asr=null; W.loading=null; W.failedAt=0; W.model=model; }
   if(W.asr) return Promise.resolve(W.asr);
   if(!W.loading && Date.now()-W.failedAt<30000) return Promise.reject(new Error('aguardando'));
   if(!W.loading){
-    add('sys','Baixando o reconhecimento de voz (uns 80 MB, só na primeira vez)…');
+    add('sys',`Baixando o reconhecimento de voz (${model.endsWith('small')?'uns 250':'uns 80'} MB, só na primeira vez)…`);
     W.loading=import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1').then(async T=>{
-      W.asr=await T.pipeline('automatic-speech-recognition','Xenova/whisper-base',{
+      const asr=await T.pipeline('automatic-speech-recognition',model,{
         progress_callback:p=>{ if(p.status==='progress' && /onnx/.test(p.file||'')) stateEl.textContent='CARREGANDO VOZ '+Math.round(p.progress||0)+'%'; }});
+      if(W.model!==model) return asr; W.asr=asr;
       add('sys','Reconhecimento de voz pronto, senhor.'); if(!listening) setState(''); return W.asr;
     }).catch(e=>{ W.loading=null; W.failedAt=Date.now(); add('sys','Não consegui baixar o reconhecimento de voz: '+(e.message||e)); throw e; });
   }
   return W.loading;
 }
+// áudio 16 kHz -> WAV, para mandar ao ElevenLabs Scribe
+function toWav(f32){
+  const b=new ArrayBuffer(44+f32.length*2), v=new DataView(b), w=(o,s)=>[...s].forEach((c,i)=>v.setUint8(o+i,c.charCodeAt(0)));
+  w(0,'RIFF'); v.setUint32(4,36+f32.length*2,true); w(8,'WAVEfmt '); v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,16000,true); v.setUint32(28,32000,true); v.setUint16(32,2,true); v.setUint16(34,16,true); w(36,'data'); v.setUint32(40,f32.length*2,true);
+  for(let i=0;i<f32.length;i++){ const x=Math.max(-1,Math.min(1,f32[i])); v.setInt16(44+i*2,x<0?x*0x8000:x*0x7fff,true); }
+  return new Blob([b],{type:'audio/wav'});
+}
+async function transcribe(audio){
+  if(sttKind()==='scribe'){
+    const key=store.get('jarvis_elkey'); if(!key) throw new Error('sem chave da ElevenLabs');
+    const fd=new FormData(); fd.append('file',toWav(audio),'fala.wav'); fd.append('model_id','scribe_v1'); fd.append('language_code','por'); fd.append('tag_audio_events','false');
+    const r=await fetch('https://api.elevenlabs.io/v1/speech-to-text',{method:'POST',headers:{'xi-api-key':key},body:fd});
+    const j=await r.json(); if(!r.ok) throw new Error(j.detail?.message||j.detail?.status||r.status);
+    return j.text||'';
+  }
+  const asr=await loadAsr();
+  return (await asr(audio,{language:'portuguese',task:'transcribe'})).text||'';
+}
 async function wStart(){
   try{
-    loadAsr().catch(()=>{});
+    if(sttKind()!=='scribe') loadAsr().catch(()=>{});
     if(!W.stream){
       W.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
       const AC=window.AudioContext||window.webkitAudioContext; let src;
@@ -387,7 +413,7 @@ function wChunk(buf){
     return;
   }
   W.chunks.push(d); W.len+=ms; W.silent=loud?0:W.silent+ms;
-  if(W.silent>900 || W.len>12000) wFinish();
+  if(W.silent>1300 || W.len>15000) wFinish();
 }
 async function wFinish(){
   const chunks=W.chunks; W.inSpeech=false; W.chunks=[];
@@ -396,12 +422,10 @@ async function wFinish(){
   const r=W.ctx.sampleRate/16000, audio=r===1?raw:Float32Array.from({length:Math.floor(total/r)},(_,i)=>raw[Math.floor(i*r)]);
   W.transcribing=true; const prev=stateEl.textContent; stateEl.textContent='TRANSCREVENDO…';
   try{
-    const asr=await loadAsr();
-    const out=await asr(audio,{language:'portuguese',task:'transcribe'});
-    const txt=(out.text||'').trim();
+    const txt=(await transcribe(audio)).trim();
     W.transcribing=false;
     if(txt && !JUNK.test(txt)) heard(txt); else if(listening) idleLabel();
-  }catch(e){ W.transcribing=false; stateEl.textContent=prev; }
+  }catch(e){ W.transcribing=false; stateEl.textContent=prev; if(sttKind()==='scribe') add('sys','O Scribe falhou ('+(e.message||e)+').'); }
 }
 
 $('wakeOn').onchange=e=>{ store.set('jarvis_wake',e.target.checked?'1':'0'); if(!SR && !navigator.mediaDevices){ e.target.checked=false; return add('sys','Este navegador não dá acesso ao microfone.'); } if(e.target.checked) startRec('wake'); else { mode='idle'; stopRec(); setState(''); } };
@@ -411,7 +435,7 @@ $('micBtn').onclick=()=>{
   if(listening) { stopRec(); setTimeout(()=>startRec('ptt'),250); } else startRec('ptt');
 };
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden) resumeWake(); });
-if(useWhisper()) setTimeout(()=>loadAsr().catch(()=>{}),500);
+if(useWhisper()&&sttKind()!=='scribe') setTimeout(()=>loadAsr().catch(()=>{}),500);
 
 // ---------- install (PWA) ----------
 let installEvt=null;
